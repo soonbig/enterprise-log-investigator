@@ -10,7 +10,7 @@ The current UTC date and time is: ${new Date().toISOString()}
 Always use this as the basis for time ranges. Never guess dates.
 
 You have three tools:
-1. fetch_logs — Query Cloudflare Analytics GraphQL for HTTP request data and firewall events
+1. fetch_logs — Query Cloudflare Analytics GraphQL for HTTP request data and firewall events. The tool automatically splits requests longer than 3 days into multiple windows, so you can request any time range in a single call.
 2. execute_code — Run Python in a sandbox (numpy, pandas, scipy, matplotlib available). Always save charts with plt.savefig() and use base64 output.
 3. deploy_worker — Deploy the analysis results as a live Cloudflare Worker endpoint
 
