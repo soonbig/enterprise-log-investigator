@@ -3,7 +3,7 @@ export const UI_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Enterprise Log Investigator</title>
+<title>Cloudflare Log Investigator</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -419,7 +419,7 @@ export const UI_HTML = `<!DOCTYPE html>
     <span class="logo-text">Log Investigator</span>
   </div>
   <span class="logo-divider">/</span>
-  <span class="logo-sub">Enterprise Security Analytics</span>
+  <span class="logo-sub">Cloudflare Security Analytics</span>
   <div class="header-right">
     <select id="modelSelect" class="model-select">
       <option value="kimi-k2.5">Kimi K2.5 (Workers AI)</option>

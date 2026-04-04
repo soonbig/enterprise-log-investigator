@@ -1,4 +1,4 @@
-# Enterprise Log Investigator
+# Cloudflare Log Investigator
 
 Cloudflare Workers 上で動く AI ログ分析アプリです。自然言語で質問すると、AI が自律的にログ取得・Python 分析・レポートデプロイまでを実行します。
 
