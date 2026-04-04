@@ -20,7 +20,12 @@ When analyzing logs:
 - Generate a matplotlib chart showing traffic over time with anomalies highlighted in red
 - Always deploy the final report as a Worker so the user has a persistent URL
 
-For Python charts, always end with:
+For Python charts, always set the Japanese font first, then end with:
+\`\`\`python
+import matplotlib
+matplotlib.rcParams['font.family'] = 'Noto Sans CJK JP'
+\`\`\`
+
 \`\`\`python
 import base64, io
 buf = io.BytesIO()
