@@ -1,0 +1,34 @@
+name = "enterprise-log-investigator"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[limits]
+cpu_ms = 300000
+
+# Secrets (set via: wrangler secret put <NAME>)
+# ANTHROPIC_API_KEY
+# CF_API_TOKEN        - Zone Analytics:Read + Workers:Edit + Account:Read
+# CF_ZONE_ID          - soonchang.me zone ID
+# CF_ACCOUNT_ID
+
+[[containers]]
+class_name = "Sandbox"
+image = "./sandbox/Dockerfile"
+instance_type = "basic"
+max_instances = 3
+
+[[durable_objects.bindings]]
+class_name = "Sandbox"
+name = "SANDBOX"
+
+[[migrations]]
+new_sqlite_classes = ["Sandbox"]
+tag = "v1"
+
+[ai]
+binding = "AI"
+
+[[unsafe.bindings]]
+name = "LOADER"
+type = "worker_loader"
