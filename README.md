@@ -56,6 +56,15 @@ npm install
 
 ### Secrets の設定
 
+**1. `wrangler.toml` でドメインを設定：**
+
+```toml
+[vars]
+ZONE_NAME = "example.com"   # 分析対象のドメイン名
+```
+
+**2. Secrets を設定：**
+
 ```bash
 npx wrangler secret put ANTHROPIC_API_KEY   # Claude を使う場合
 npx wrangler secret put CF_API_TOKEN        # 下記パーミッション参照

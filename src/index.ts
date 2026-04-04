@@ -8,7 +8,7 @@ export { Sandbox } from '@cloudflare/sandbox'
 
 const app = new Hono<{ Bindings: Env }>()
 
-app.get('/', (c) => c.html(UI_HTML))
+app.get('/', (c) => c.html(UI_HTML.replace(/\{\{ZONE_NAME\}\}/g, c.env.ZONE_NAME)))
 
 // Pre-warm the sandbox container — call on page load so it's ready by first query
 app.get('/api/warmup', async (c) => {

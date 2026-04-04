@@ -425,13 +425,13 @@ export const UI_HTML = `<!DOCTYPE html>
       <option value="kimi-k2.5">Kimi K2.5 (Workers AI)</option>
       <option value="claude-sonnet">Claude Sonnet 4.6</option>
     </select>
-    <div class="zone-badge"><span class="zone-dot"></span> soonchang.me</div>
+    <div class="zone-badge"><span class="zone-dot"></span> {{ZONE_NAME}}</div>
   </div>
 </header>
 
 <div class="chat" id="chat">
   <div class="message assistant">
-    <div class="bubble">soonchang.me のログ調査をお手伝いします。
+    <div class="bubble">{{ZONE_NAME}} のログ調査をお手伝いします。
 
 怪しいトラフィックの検知、特定時間帯の異常リクエスト分析、ファイアウォールイベントの確認など、何でもどうぞ。</div>
   </div>

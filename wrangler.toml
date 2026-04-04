@@ -6,10 +6,13 @@ compatibility_flags = ["nodejs_compat"]
 [limits]
 cpu_ms = 300000
 
+[vars]
+ZONE_NAME = "soonchang.me"
+
 # Secrets (set via: wrangler secret put <NAME>)
 # ANTHROPIC_API_KEY
-# CF_API_TOKEN        - Zone Analytics:Read + Workers:Edit + Account:Read
-# CF_ZONE_ID          - soonchang.me zone ID
+# CF_API_TOKEN        - Zone Analytics:Read + Workers:Edit + Account:Read + Workers AI:Read
+# CF_ZONE_ID          - target zone ID
 # CF_ACCOUNT_ID
 
 [[containers]]

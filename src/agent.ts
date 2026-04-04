@@ -4,7 +4,7 @@ import { executeCode } from './tools/execute_code'
 import { deployWorker, buildReportWorker } from './tools/deploy_worker'
 import type { Env, AgentEvent, ModelProvider } from './types'
 
-const getSystemPrompt = () => `You are an enterprise security analyst AI for the soonchang.me domain on Cloudflare.
+const getSystemPrompt = (zoneName: string) => `You are an enterprise security analyst AI for the ${zoneName} domain on Cloudflare.
 
 The current UTC date and time is: ${new Date().toISOString()}
 Always use this as the basis for time ranges. Never guess dates.
@@ -38,7 +38,7 @@ const TOOLS_OPENAI = [
     function: {
       name: 'fetch_logs',
       description:
-        'Fetch HTTP request metrics and firewall events from Cloudflare Analytics GraphQL for soonchang.me. Returns hourly request counts, threat counts, unique visitors, and firewall events with client IPs and rule IDs.',
+        'Fetch HTTP request metrics and firewall events from Cloudflare Analytics GraphQL for the configured zone. Returns hourly request counts, threat counts, unique visitors, and firewall events with client IPs and rule IDs.',
       parameters: {
         type: 'object',
         properties: {
@@ -303,7 +303,7 @@ async function runWorkersAI(
   emit: (event: AgentEvent) => void,
 ) {
   const messages: WorkersAIMessage[] = [
-    { role: 'system', content: getSystemPrompt() },
+    { role: 'system', content: getSystemPrompt(env.ZONE_NAME) },
     { role: 'user', content: userMessage },
   ]
 
@@ -381,7 +381,7 @@ async function runAnthropic(
     const response = await client.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 8192,
-      system: getSystemPrompt(),
+      system: getSystemPrompt(env.ZONE_NAME),
       tools: TOOLS_ANTHROPIC,
       messages,
     })

@@ -1,7 +1,10 @@
 import type { Sandbox } from './index'
 
 export interface Env {
-  // Secrets
+  // Config (wrangler.toml [vars])
+  ZONE_NAME: string
+
+  // Secrets (wrangler secret put)
   ANTHROPIC_API_KEY: string
   CF_API_TOKEN: string
   CF_ZONE_ID: string
