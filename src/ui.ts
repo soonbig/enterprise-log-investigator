@@ -259,6 +259,76 @@ export const UI_HTML = `<!DOCTYPE html>
   }
   .chart-wrap img { width: 100%; display: block; }
 
+  /* Preview panel */
+  .preview-panel {
+    max-width: 85%;
+    border: 1px solid var(--orange);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 1px 6px rgba(246, 130, 31, 0.15);
+  }
+  .preview-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--orange-light);
+    border-bottom: 1px solid var(--orange);
+    font-size: 0.82rem;
+    color: var(--orange-dark);
+    font-weight: 600;
+  }
+  .preview-header .preview-badge {
+    background: var(--orange);
+    color: white;
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-weight: 600;
+  }
+  .preview-header .preview-label {
+    margin-left: auto;
+    font-weight: 400;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+  .preview-iframe {
+    width: 100%;
+    height: 480px;
+    border: none;
+    background: #ffffff;
+  }
+  .preview-actions {
+    display: flex;
+    gap: 10px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+  }
+  .preview-actions button {
+    padding: 8px 20px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+    border: none;
+  }
+  .btn-deploy {
+    background: var(--green);
+    color: white;
+  }
+  .btn-deploy:hover { background: #047857; }
+  .btn-deploy:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-cancel {
+    background: var(--surface-2);
+    color: var(--text-secondary);
+    border: 1px solid var(--border) !important;
+  }
+  .btn-cancel:hover { background: var(--border); }
+  .btn-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
+
   /* Deploy badge */
   .deploy-banner {
     display: flex;
@@ -405,6 +475,63 @@ export const UI_HTML = `<!DOCTYPE html>
   .tool-body pre::-webkit-scrollbar { width: 4px; }
   .tool-body pre::-webkit-scrollbar-track { background: transparent; }
   .tool-body pre::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+  /* Status bar */
+  .status-bar {
+    display: none;
+    max-width: 900px;
+    margin: 0 auto 10px;
+    padding: 8px 14px;
+    border-radius: 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    align-items: center;
+    gap: 10px;
+    transition: all 0.3s;
+  }
+  .status-bar.visible { display: flex; }
+  .status-bar.warn {
+    background: var(--orange-light);
+    border-color: #fed7aa;
+    color: var(--orange-dark);
+  }
+
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--orange);
+    animation: pulse 1.5s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+  .status-bar.warn .status-dot { background: var(--yellow); }
+
+  .status-step {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .status-step-icon { margin-right: 4px; }
+
+  .status-timer {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    min-width: 40px;
+    text-align: right;
+  }
+  .status-bar.warn .status-timer { color: var(--orange-dark); }
+
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .status-bar.visible { animation: slideUp 0.2s ease-out; }
 </style>
 </head>
 <body>
@@ -438,6 +565,11 @@ export const UI_HTML = `<!DOCTYPE html>
 </div>
 
 <div class="input-area">
+  <div class="status-bar" id="statusBar">
+    <span class="status-dot"></span>
+    <span class="status-step" id="statusStep">Processing...</span>
+    <span class="status-timer" id="statusTimer">0s</span>
+  </div>
   <div class="suggestions" id="suggestions">
     <button class="suggestion" onclick="fillSuggestion(this)">昨日の夜中に異常なリクエストがあったか調べて</button>
     <button class="suggestion" onclick="fillSuggestion(this)">過去24時間のトラフィックを分析して</button>
@@ -462,10 +594,65 @@ export const UI_HTML = `<!DOCTYPE html>
   const input = document.getElementById('input')
   const sendBtn = document.getElementById('send')
   const modelSelect = document.getElementById('modelSelect')
+  const statusBar = document.getElementById('statusBar')
+  const statusStep = document.getElementById('statusStep')
+  const statusTimer = document.getElementById('statusTimer')
   const sessionId = crypto.randomUUID()
 
-  // Pre-warm sandbox on page load
-  fetch('/api/warmup').catch(() => {})
+  // Pre-warm sandbox on page load — with same sessionId so the container is reused
+  fetch('/api/warmup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId }),
+  }).catch(() => {})
+
+  // ── Status bar timer ──
+  let statusInterval = null
+  let statusStartTime = 0
+  let lastEventTime = 0
+
+  function formatElapsed(ms) {
+    const s = Math.floor(ms / 1000)
+    if (s < 60) return s + 's'
+    const m = Math.floor(s / 60)
+    return m + 'm ' + (s % 60) + 's'
+  }
+
+  function showStatus(step) {
+    statusStep.textContent = step
+    statusBar.classList.add('visible')
+    statusBar.classList.remove('warn')
+    lastEventTime = Date.now()
+  }
+
+  function startStatusTimer() {
+    statusStartTime = Date.now()
+    lastEventTime = Date.now()
+    showStatus('Thinking...')
+    if (statusInterval) clearInterval(statusInterval)
+    statusInterval = setInterval(() => {
+      const elapsed = Date.now() - statusStartTime
+      const sinceLast = Date.now() - lastEventTime
+      statusTimer.textContent = formatElapsed(elapsed)
+
+      // Warning state after 60s without any event
+      if (sinceLast > 60000) {
+        statusBar.classList.add('warn')
+        statusStep.textContent = '\\u23F3 Still processing... (' + formatElapsed(sinceLast) + ' since last update)'
+      } else if (elapsed > 120000) {
+        statusBar.classList.add('warn')
+      }
+    }, 500)
+  }
+
+  function updateStatus(step) {
+    showStatus(step)
+  }
+
+  function hideStatus() {
+    statusBar.classList.remove('visible', 'warn')
+    if (statusInterval) { clearInterval(statusInterval); statusInterval = null }
+  }
 
   let currentAssistantBubble = null
   let currentTextContent = ''
@@ -525,9 +712,9 @@ export const UI_HTML = `<!DOCTYPE html>
     const panel = document.createElement('div')
     panel.className = 'tool-panel'
 
-    const iconClass = { fetch_logs: 'fetch', execute_code: 'code', deploy_worker: 'deploy' }[name] || 'fetch'
-    const iconText = { fetch_logs: '\\u{1F4E1}', execute_code: '\\u{2699}\\uFE0F', deploy_worker: '\\u{1F680}' }[name] || '\\u{1F527}'
-    const label = { fetch_logs: 'fetch_logs', execute_code: 'execute_code', deploy_worker: 'deploy_worker' }[name] || name
+    const iconClass = { fetch_logs: 'fetch', execute_code: 'code', preview_report: 'deploy', deploy_worker: 'deploy' }[name] || 'fetch'
+    const iconText = { fetch_logs: '\\u{1F4E1}', execute_code: '\\u{2699}\\uFE0F', preview_report: '\\u{26A1}', deploy_worker: '\\u{1F680}' }[name] || '\\u{1F527}'
+    const label = { fetch_logs: 'fetch_logs', execute_code: 'execute_code', preview_report: 'preview_report', deploy_worker: 'deploy_worker' }[name] || name
 
     panel.innerHTML = \`
       <div class="tool-header">
@@ -576,6 +763,88 @@ export const UI_HTML = `<!DOCTYPE html>
     scrollBottom()
   }
 
+  // Pending deploy data from preview
+  let pendingDeploy = null  // { workerCode, workerName }
+
+  function addPreviewPanel(html, workerCode, workerName) {
+    // Store deploy data for later
+    pendingDeploy = { workerCode, workerName }
+
+    const wrap = document.createElement('div')
+    wrap.className = 'message assistant'
+    const panel = document.createElement('div')
+    panel.className = 'preview-panel'
+    panel.innerHTML = \`
+      <div class="preview-header">
+        <span>\\u{26A1}</span>
+        <span>Report Preview</span>
+        <span class="preview-badge">Dynamic Workers</span>
+        <span class="preview-label">worker_loader \\u2014 temporary V8 isolate</span>
+      </div>
+    \`
+    const iframe = document.createElement('iframe')
+    iframe.className = 'preview-iframe'
+    iframe.sandbox = 'allow-same-origin'
+    panel.appendChild(iframe)
+
+    // Action buttons
+    const actions = document.createElement('div')
+    actions.className = 'preview-actions'
+    actions.id = 'preview-actions'
+    actions.innerHTML = \`
+      <button class="btn-deploy" onclick="confirmDeploy(this)">\\u{1F680} Worker \\u3068\\u3057\\u3066\\u30C7\\u30D7\\u30ED\\u30A4</button>
+      <button class="btn-cancel" onclick="cancelDeploy(this)">\\u274C \\u3084\\u3081\\u308B</button>
+    \`
+    panel.appendChild(actions)
+
+    wrap.appendChild(panel)
+    chat.appendChild(wrap)
+
+    // Write HTML content into iframe
+    iframe.srcdoc = html
+    scrollBottom()
+  }
+
+  async function confirmDeploy(btn) {
+    if (!pendingDeploy) return
+
+    // Disable both buttons
+    const actions = btn.parentElement
+    actions.querySelectorAll('button').forEach(b => { b.disabled = true })
+    btn.textContent = '\\u{1F680} \\u30C7\\u30D7\\u30ED\\u30A4\\u4E2D...'
+
+    try {
+      const res = await fetch('/api/deploy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: pendingDeploy.workerCode,
+          name: pendingDeploy.workerName,
+        }),
+      })
+
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+
+      // Show deploy banner
+      addDeployBanner(data.url, data.name)
+      btn.textContent = '\\u2713 \\u30C7\\u30D7\\u30ED\\u30A4\\u5B8C\\u4E86'
+      btn.style.background = 'var(--green)'
+      pendingDeploy = null
+    } catch (err) {
+      btn.textContent = '\\u274C \\u30C7\\u30D7\\u30ED\\u30A4\\u5931\\u6557'
+      btn.style.background = 'var(--red)'
+      appendText('\\nDeploy error: ' + err.message)
+    }
+  }
+
+  function cancelDeploy(btn) {
+    const actions = btn.parentElement
+    actions.querySelectorAll('button').forEach(b => { b.disabled = true })
+    btn.textContent = '\\u274C \\u30AD\\u30E3\\u30F3\\u30BB\\u30EB\\u6E08\\u307F'
+    pendingDeploy = null
+  }
+
   function addDeployBanner(url, name) {
     const wrap = document.createElement('div')
     wrap.className = 'message assistant'
@@ -604,6 +873,14 @@ export const UI_HTML = `<!DOCTYPE html>
       .replace(/"/g, '&quot;')
   }
 
+  // Step display names for status bar
+  const STEP_LABELS = {
+    fetch_logs: '\\u{1F4E1} Fetching logs from Cloudflare Analytics...',
+    execute_code: '\\u{2699}\\uFE0F Running Python analysis in Sandbox...',
+    preview_report: '\\u{26A1} Rendering preview with Dynamic Workers...',
+    deploy_worker: '\\u{1F680} Deploying Worker...',
+  }
+
   async function sendMessage() {
     const text = input.value.trim()
     if (!text || sendBtn.disabled) return
@@ -620,6 +897,8 @@ export const UI_HTML = `<!DOCTYPE html>
     currentTextContent = ''
 
     let activePanel = null
+
+    startStatusTimer()
 
     try {
       const res = await fetch('/api/chat', {
@@ -644,17 +923,26 @@ export const UI_HTML = `<!DOCTYPE html>
           if (!part.startsWith('data: ')) continue
           const event = JSON.parse(part.slice(6))
 
+          // Update status bar on every event
+          lastEventTime = Date.now()
+          statusBar.classList.remove('warn')
+
           if (event.type === 'text') {
+            updateStatus('\\u{1F4AC} Generating response...')
             appendText(event.content)
           } else if (event.type === 'tool_start') {
-            currentAssistantBubble = null // new section
+            updateStatus(STEP_LABELS[event.name] || '\\u{1F527} Running ' + event.name + '...')
+            currentAssistantBubble = null
             activePanel = addToolPanel(event.name, event.input)
           } else if (event.type === 'tool_result') {
+            updateStatus('\\u{1F9E0} Analyzing results...')
             if (activePanel) markToolDone(activePanel, event.result)
             activePanel = null
             currentAssistantBubble = null
           } else if (event.type === 'chart') {
             addChart(event.base64)
+          } else if (event.type === 'preview') {
+            addPreviewPanel(event.html, event.workerCode, event.workerName)
           } else if (event.type === 'deploy') {
             addDeployBanner(event.url, event.workerName)
           } else if (event.type === 'error') {
@@ -665,6 +953,7 @@ export const UI_HTML = `<!DOCTYPE html>
     } catch (err) {
       appendText('\\n\\nConnection error: ' + err.message)
     } finally {
+      hideStatus()
       sendBtn.disabled = false
       input.focus()
     }

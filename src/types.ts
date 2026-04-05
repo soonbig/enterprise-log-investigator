@@ -30,6 +30,7 @@ export type AgentEvent =
   | { type: 'tool_start'; name: string; input: unknown }
   | { type: 'tool_result'; name: string; result: unknown }
   | { type: 'chart'; base64: string }
+  | { type: 'preview'; html: string; workerCode: string; workerName: string }
   | { type: 'deploy'; url: string; workerName: string }
   | { type: 'done' }
   | { type: 'error'; message: string }

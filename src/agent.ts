@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { fetchLogs } from './tools/fetch_logs'
 import { executeCode } from './tools/execute_code'
-import { deployWorker, buildReportWorker } from './tools/deploy_worker'
+import { previewWorker, deployWorker, buildReportWorker } from './tools/deploy_worker'
 import type { Env, AgentEvent, ModelProvider } from './types'
 
 const getSystemPrompt = (zoneName: string) => `You are an enterprise security analyst AI for the ${zoneName} domain on Cloudflare.
@@ -9,27 +9,30 @@ const getSystemPrompt = (zoneName: string) => `You are an enterprise security an
 The current UTC date and time is: ${new Date().toISOString()}
 Always use this as the basis for time ranges. Never guess dates.
 
-You have three tools:
+You have four tools:
 1. fetch_logs — Query Cloudflare Analytics GraphQL for HTTP request data and firewall events. The tool automatically splits requests longer than 3 days into multiple windows, so you can request any time range in a single call.
 2. execute_code — Run Python in a sandbox (numpy, pandas, scipy, matplotlib available). Always save charts with plt.savefig() and use base64 output.
-3. deploy_worker — Deploy the analysis results as a live Cloudflare Worker endpoint
+3. preview_report — Preview the analysis report using Dynamic Workers (worker_loader). This instantly loads the report as a temporary Worker for the user to review before permanent deployment. Always call this BEFORE deploy_worker.
+4. deploy_worker — Deploy the analysis results as a permanent live Cloudflare Worker endpoint. Only call this AFTER preview_report.
 
 When analyzing logs:
 - First fetch the relevant time range
-- Write Python code to detect anomalies (use z-score: flag anything > 2.5σ)
-- Generate a matplotlib chart showing traffic over time with anomalies highlighted in red
-- Always deploy the final report as a Worker so the user has a persistent URL
+- Write Python code to analyze the data (anomaly detection with z-score > 2.5σ, IP aggregation, threat analysis, etc.)
+- Generate a matplotlib chart when useful (traffic trends, threat timelines, IP distributions)
+- ALWAYS call preview_report after completing the analysis — whether or not a chart was generated. This lets the user review and optionally deploy the report as a permanent Worker.
+- Do NOT call deploy_worker yourself. The user will deploy directly from the UI after reviewing the preview.
 
-For Python charts, always set the Japanese font first, then end with:
+For Python charts (only when needed), set the Japanese font first:
 \`\`\`python
 import matplotlib
 matplotlib.rcParams['font.family'] = 'Noto Sans CJK JP'
 \`\`\`
 
+End chart code with:
 \`\`\`python
 import base64, io
 buf = io.BytesIO()
-plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='#0f172a')
+plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#0f172a')
 buf.seek(0)
 print("CHART:" + base64.b64encode(buf.read()).decode())
 \`\`\`
@@ -81,9 +84,48 @@ const TOOLS_OPENAI = [
   {
     type: 'function' as const,
     function: {
+      name: 'preview_report',
+      description:
+        'Preview the analysis report using Dynamic Workers (worker_loader). Instantly renders the report as a temporary Worker without deploying. Call this BEFORE deploy_worker so the user can review the report.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: {
+            type: 'string',
+            description: 'Report title',
+          },
+          summary: {
+            type: 'string',
+            description: 'Human-readable summary of findings',
+          },
+          anomalies: {
+            type: 'array',
+            description: 'List of detected anomalies',
+            items: {
+              type: 'object',
+              properties: {
+                time: { type: 'string' },
+                requests: { type: 'number' },
+                zscore: { type: 'number' },
+              },
+              required: ['time', 'requests', 'zscore'],
+            },
+          },
+          chart_base64: {
+            type: 'string',
+            description: 'Base64-encoded PNG chart from execute_code',
+          },
+        },
+        required: ['title', 'summary', 'anomalies'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
       name: 'deploy_worker',
       description:
-        'Deploy the analysis report as a live Cloudflare Worker with a public URL. Call this after generating the analysis to give the user a persistent report endpoint.',
+        'Deploy the analysis report as a permanent live Cloudflare Worker with a public URL. Call this AFTER preview_report to give the user a persistent report endpoint.',
       parameters: {
         type: 'object',
         properties: {
@@ -138,11 +180,18 @@ interface ToolCall {
   arguments: Record<string, unknown>
 }
 
+// Shared context across tool calls within a single agent run
+interface AgentContext {
+  lastChartBase64?: string // Preserved so preview_report/deploy_worker can auto-inject it
+  accumulatedText: string  // All AI text output, auto-injected into report body
+}
+
 async function executeTool(
   tool: ToolCall,
   env: Env,
   sessionId: string,
   emit: (event: AgentEvent) => void,
+  ctx: AgentContext,
 ): Promise<{ result: unknown }> {
   emit({ type: 'tool_start', name: tool.name, input: tool.arguments })
 
@@ -155,15 +204,17 @@ async function executeTool(
       const input = tool.arguments as { code: string }
       const codeResult = await executeCode(input, env, sessionId)
 
-      // Emit chart to UI via SSE
+      // Emit chart to UI via SSE and capture base64 for later tools
       let chartGenerated = false
       if (codeResult.chart) {
         emit({ type: 'chart', base64: codeResult.chart })
+        ctx.lastChartBase64 = codeResult.chart
         chartGenerated = true
       } else if (codeResult.output?.includes('CHART:')) {
         const match = codeResult.output.match(/CHART:([A-Za-z0-9+/=]+)/)
         if (match) {
           emit({ type: 'chart', base64: match[1] })
+          ctx.lastChartBase64 = match[1]
           chartGenerated = true
         }
       }
@@ -175,6 +226,48 @@ async function executeTool(
         output: cleanOutput.substring(0, 2000),
         error: codeResult.error,
         chartGenerated,
+        ...(chartGenerated
+          ? { nextStep: 'Chart has been captured and will be automatically included in preview_report and deploy_worker. Do NOT call execute_code again to regenerate the chart. Call preview_report now.' }
+          : {}),
+      }
+    } else if (tool.name === 'preview_report') {
+      const input = tool.arguments as {
+        title: string
+        summary: string
+        anomalies: Array<{ time: string; requests: number; zscore: number }>
+        chart_base64?: string
+      }
+      // Auto-inject chart from context if not provided
+      const chartBase64 = input.chart_base64 || ctx.lastChartBase64
+      if (!input.chart_base64 && ctx.lastChartBase64) {
+        console.log(`[preview] auto-injecting chart from context (${ctx.lastChartBase64.length} chars)`)
+      }
+      // Auto-inject accumulated AI analysis text as report body
+      const body = ctx.accumulatedText.trim() || undefined
+      if (body) {
+        console.log(`[preview] auto-injecting analysis text (${body.length} chars)`)
+      }
+      const workerCode = buildReportWorker({
+        title: input.title,
+        summary: input.summary,
+        body,
+        anomalies: input.anomalies,
+        chartBase64,
+      })
+      console.log(`[preview] loading report via Dynamic Workers (worker_loader)...`)
+      const startTime = Date.now()
+      const preview = await previewWorker(workerCode, env)
+      const elapsed = Date.now() - startTime
+      console.log(`[preview] rendered in ${elapsed}ms`)
+      // Generate a worker name from the title
+      const workerName = `log-report-${new Date().toISOString().slice(0, 10)}`
+      emit({ type: 'preview', html: preview.html, workerCode, workerName })
+      result = {
+        previewed: true,
+        renderTimeMs: elapsed,
+        htmlLength: preview.html.length,
+        chartIncluded: !!chartBase64,
+        instruction: 'Preview is now displayed to the user with deploy/cancel buttons. STOP here — the user will deploy directly from the UI. Do NOT call deploy_worker yourself.',
       }
     } else if (tool.name === 'deploy_worker') {
       const input = tool.arguments as {
@@ -184,11 +277,22 @@ async function executeTool(
         anomalies: Array<{ time: string; requests: number; zscore: number }>
         chart_base64?: string
       }
+      // Auto-inject chart from context if not provided
+      const chartBase64 = input.chart_base64 || ctx.lastChartBase64
+      if (!input.chart_base64 && ctx.lastChartBase64) {
+        console.log(`[deploy] auto-injecting chart from context (${ctx.lastChartBase64.length} chars)`)
+      }
+      // Auto-inject accumulated AI analysis text as report body
+      const body = ctx.accumulatedText.trim() || undefined
+      if (body) {
+        console.log(`[deploy] auto-injecting analysis text (${body.length} chars)`)
+      }
       const workerCode = buildReportWorker({
         title: input.title,
         summary: input.summary,
+        body,
         anomalies: input.anomalies,
-        chartBase64: input.chart_base64,
+        chartBase64,
       })
       const deployed = await deployWorker({ name: input.name, code: workerCode }, env)
       result = deployed
@@ -312,9 +416,10 @@ async function runWorkersAI(
     { role: 'user', content: userMessage },
   ]
 
+  const ctx: AgentContext = { accumulatedText: '' }
   let turn = 0
   let emptyRetries = 0
-  const MAX_TURNS = 6
+  const MAX_TURNS = 8
   while (turn < MAX_TURNS) {
     turn++
     const msgSize = JSON.stringify(messages).length
@@ -323,6 +428,7 @@ async function runWorkersAI(
 
     if (content) {
       emit({ type: 'text', content })
+      ctx.accumulatedText += content + '\n'
     }
 
     console.log(`[agent] turn ${turn} done: finish_reason=${finish_reason}, tool_calls=${tool_calls?.length ?? 0}, content_length=${content.length}`)
@@ -334,7 +440,7 @@ async function runWorkersAI(
       messages.push({ role: 'assistant', content: null })
       messages.push({
         role: 'user',
-        content: 'Continue with the analysis. Use execute_code to analyze the data with Python, then deploy_worker to create a report.',
+        content: 'Continue with the analysis. Use execute_code to analyze the data with Python, then preview_report to show the report preview.',
       })
       continue
     }
@@ -359,7 +465,7 @@ async function runWorkersAI(
 
       const { result } = await executeTool(
         { id: tc.id, name: tc.function.name, arguments: args },
-        env, sessionId, emit,
+        env, sessionId, emit, ctx,
       )
 
       messages.push({
@@ -382,6 +488,8 @@ async function runAnthropic(
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY })
   const messages: Anthropic.MessageParam[] = [{ role: 'user', content: userMessage }]
 
+  const ctx: AgentContext = { accumulatedText: '' }
+
   while (true) {
     const response = await client.messages.create({
       model: 'claude-sonnet-4-6',
@@ -394,6 +502,7 @@ async function runAnthropic(
     for (const block of response.content) {
       if (block.type === 'text' && block.text) {
         emit({ type: 'text', content: block.text })
+        ctx.accumulatedText += block.text + '\n'
       }
     }
 
@@ -406,7 +515,7 @@ async function runAnthropic(
 
       const { result } = await executeTool(
         { id: block.id, name: block.name, arguments: block.input as Record<string, unknown> },
-        env, sessionId, emit,
+        env, sessionId, emit, ctx,
       )
 
       toolResults.push({

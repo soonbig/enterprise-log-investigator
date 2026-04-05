@@ -29,6 +29,9 @@ name = "SANDBOX"
 new_sqlite_classes = ["Sandbox"]
 tag = "v1"
 
+[observability]
+enabled = true
+
 [ai]
 binding = "AI"
 
